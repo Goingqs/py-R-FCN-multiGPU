@@ -26,9 +26,13 @@ class AnchorTargetLayer(caffe.Layer):
     def setup(self, bottom, top):
         layer_params = yaml.load(self.param_str)
         anchor_scales = layer_params.get('scales', (8, 16, 32))
-        self._anchors = generate_anchors(scales=np.array(anchor_scales))
+        self._anchor_scales = anchor_scales
+        self._times = layer_params.get('densification_times',(1))
+
+        self._anchors = generate_anchors(ratios=[1],scales=np.array(anchor_scales),times=self._times)
         self._num_anchors = self._anchors.shape[0]
         self._feat_stride = layer_params['feat_stride']
+        
 
         if DEBUG:
             print 'anchors:'
@@ -95,6 +99,7 @@ class AnchorTargetLayer(caffe.Layer):
         shift_x, shift_y = np.meshgrid(shift_x, shift_y)
         shifts = np.vstack((shift_x.ravel(), shift_y.ravel(),
                             shift_x.ravel(), shift_y.ravel())).transpose()
+
         # add A anchors (1, A, 4) to
         # cell K shifts (K, 1, 4) to get
         # shift anchors (K, A, 4)
@@ -133,10 +138,10 @@ class AnchorTargetLayer(caffe.Layer):
         overlaps = bbox_overlaps(
             np.ascontiguousarray(anchors, dtype=np.float),
             np.ascontiguousarray(gt_boxes, dtype=np.float))
-        argmax_overlaps = overlaps.argmax(axis=1)
-        max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
-        gt_argmax_overlaps = overlaps.argmax(axis=0)
-        gt_max_overlaps = overlaps[gt_argmax_overlaps,
+        argmax_overlaps = overlaps.argmax(axis=1)           
+        max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]       
+        gt_argmax_overlaps = overlaps.argmax(axis=0)            
+        gt_max_overlaps = overlaps[gt_argmax_overlaps,          
                                    np.arange(overlaps.shape[1])]
         gt_argmax_overlaps = np.where(overlaps == gt_max_overlaps)[0]
 
