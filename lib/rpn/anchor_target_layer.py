@@ -28,8 +28,7 @@ class AnchorTargetLayer(caffe.Layer):
         anchor_scales = layer_params.get('scales', (8, 16, 32))
         self._anchor_scales = anchor_scales
         self._times = layer_params.get('densification_times',(1))
-
-        self._anchors = generate_anchors(ratios=[1],scales=np.array(anchor_scales),times=self._times)
+        self._anchors = generate_anchors(ratios=[0.5,1,2],scales=np.array(anchor_scales),times=self._times)
         self._num_anchors = self._anchors.shape[0]
         self._feat_stride = layer_params['feat_stride']
         
