@@ -1,4 +1,4 @@
-# py-R-FCN-multiGPU
+# py-R-FCN-multiGPU with densification (FaceBoxes)
 R-FCN: Object Detection via Region-based Fully Convolutional Networks
 
 py-R-FCN now supports both joint training and alternative optimization. 
