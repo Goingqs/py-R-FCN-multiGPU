@@ -96,8 +96,20 @@ class imdb(object):
         raise NotImplementedError
 
     def _get_widths(self):
-      return [PIL.Image.open(self.image_path_at(i)).size[0]
-              for i in xrange(self.num_images)]
+        import cPickle
+        sizes = []
+        cache_name = os.path.join(self.cache_path,self.name+'size_w.pkl')
+        if os.path.exists(cache_name):
+            sizes = cPickle.load(open(cache_name,'rb'))
+
+        else:
+            sizes = [PIL.Image.open(self.image_path_at(i)).size[0]
+                for i in xrange(self.num_images)]
+            cPickle.dump(sizes,open(cache_name,'wb'))
+
+        return sizes
+
+
 
     def append_flipped_images(self):
         num_images = self.num_images
@@ -108,6 +120,7 @@ class imdb(object):
             oldx2 = boxes[:, 2].copy()
             boxes[:, 0] = widths[i] - oldx2 - 1
             boxes[:, 2] = widths[i] - oldx1 - 1
+
             assert (boxes[:, 2] >= boxes[:, 0]).all()
             entry = {'boxes' : boxes,
                      'gt_overlaps' : self.roidb[i]['gt_overlaps'],

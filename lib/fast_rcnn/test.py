@@ -183,6 +183,78 @@ def im_detect(net, im, boxes=None):
 
     return scores, pred_boxes
 
+
+
+def im_detect_rpn(net, im, boxes=None):
+    """Detect object classes in an image given object proposals.
+
+    Arguments:
+        net (caffe.Net): Fast R-CNN network to use
+        im (ndarray): color image to test (in BGR order)
+        boxes (ndarray): R x 4 array of object proposals or None (for RPN)
+
+    Returns:
+        scores (ndarray): R x K array of object class scores (K includes
+            background as object category 0)
+        boxes (ndarray): R x (4*K) array of predicted bounding boxes
+    """
+    blobs, im_scales = _get_blobs(im, boxes)
+
+    # When mapping from image ROIs to feature map ROIs, there's some aliasing
+    # (some distinct image ROIs get mapped to the same feature ROI).
+    # Here, we identify duplicate feature ROIs, so we only compute features
+    # on the unique subset.
+    if cfg.DEDUP_BOXES > 0 and not cfg.TEST.HAS_RPN:
+        v = np.array([1, 1e3, 1e6, 1e9, 1e12])
+        hashes = np.round(blobs['rois'] * cfg.DEDUP_BOXES).dot(v)
+        _, index, inv_index = np.unique(hashes, return_index=True,
+                                        return_inverse=True)
+        blobs['rois'] = blobs['rois'][index, :]
+        boxes = boxes[index, :]
+
+    if cfg.TEST.HAS_RPN:
+        im_blob = blobs['data']
+        blobs['im_info'] = np.array(
+            [[im_blob.shape[2], im_blob.shape[3], im_scales[0]]],
+            dtype=np.float32)
+
+    # reshape network inputs
+    net.blobs['data'].reshape(*(blobs['data'].shape))
+    if cfg.TEST.HAS_RPN:
+        net.blobs['im_info'].reshape(*(blobs['im_info'].shape))
+    else:
+        net.blobs['rois'].reshape(*(blobs['rois'].shape))
+
+    # do forward
+    forward_kwargs = {'data': blobs['data'].astype(np.float32, copy=False)}
+    if cfg.TEST.HAS_RPN:
+        forward_kwargs['im_info'] = blobs['im_info'].astype(np.float32, copy=False)
+    else:
+        forward_kwargs['rois'] = blobs['rois'].astype(np.float32, copy=False)
+    blobs_out = net.forward(**forward_kwargs)
+
+    if cfg.TEST.HAS_RPN:
+        assert len(im_scales) == 1, "Only single-image batch implemented"
+        rois_1 = net.blobs['rois'].data.copy()
+        rois_2 = net.blobs['rois_2'].data.copy()
+        rois_3 = net.blobs['rois_3'].data.copy()
+        # unscale back to raw image space
+        boxes_1 = rois_1[:, 1:5] / im_scales[0]
+        boxes_2 = rois_2[:, 1:5] / im_scales[0]
+        boxes_3 = rois_3[:, 1:5] / im_scales[0]
+
+    if cfg.TEST.SVM:
+        # use the raw scores before softmax under the assumption they
+        # were trained as linear SVMs
+        scores = net.blobs['cls_score'].data
+    else:
+        # use softmax estimated probabilities
+        scores_1 = net.blobs['scores'].data.copy()
+        scores_2 = net.blobs['scores_2'].data.copy()
+        scores_3 = net.blobs['scores_3'].data.copy()
+
+    return scores_1,scores_2,scores_3,boxes_1,boxes_2,boxes_3
+
 def vis_detections(im, class_name, dets, thresh=0.3):
     """Visual debugging of detections."""
     import matplotlib.pyplot as plt
@@ -224,23 +296,16 @@ def apply_nms(all_boxes, thresh):
             nms_boxes[cls_ind][im_ind] = dets[keep, :].copy()
     return nms_boxes
 
-def test_net(net, imdb, max_per_image=400, thresh=-np.inf, vis=False):
+def test_net(net, lines, max_per_image=400, thresh=-np.inf, vis=False):
     """Test a Fast R-CNN network on an image database."""
-    num_images = len(imdb.image_index)
-    # all detections are collected into:
-    #    all_boxes[cls][image] = N x 5 array of detections in
-    #    (x1, y1, x2, y2, score)
-    all_boxes = [[[] for _ in xrange(num_images)]
-                 for _ in xrange(imdb.num_classes)]
-
-    output_dir = get_output_dir(imdb, net)
+    num_images = len(lines)
+    #output_dir = get_output_dir(imdb, net)
 
     # timers
     _t = {'im_detect' : Timer(), 'misc' : Timer()}
 
-    if not cfg.TEST.HAS_RPN:
-        roidb = imdb.roidb
-
+    fout = open('det.txt','w')
+    
     for i in xrange(num_images):
         # filter out any ground truth boxes
         if cfg.TEST.HAS_RPN:
@@ -253,46 +318,35 @@ def test_net(net, imdb, max_per_image=400, thresh=-np.inf, vis=False):
             # ground truth.
             box_proposals = roidb[i]['boxes'][roidb[i]['gt_classes'] == 0]
 
-        im = cv2.imread(imdb.image_path_at(i))
+        im = cv2.imread(lines[i].strip())
         _t['im_detect'].tic()
-        scores, boxes = im_detect(net, im, box_proposals)
+        scores_1,scores_2,scores_3,boxes_1,boxes_2,boxes_3 = im_detect_rpn(net, im, box_proposals)
         _t['im_detect'].toc()
 
         _t['misc'].tic()
-        # skip j = 0, because it's the background class
-        for j in xrange(1, imdb.num_classes):
-            inds = np.where(scores[:, j] > thresh)[0]
-            cls_scores = scores[inds, j]
-            if cfg.TEST.AGNOSTIC:
-                cls_boxes = boxes[inds, 4:8]
-            else:
-                cls_boxes = boxes[inds, j*4:(j+1)*4]
-            cls_dets = np.hstack((cls_boxes, cls_scores[:, np.newaxis])) \
-                .astype(np.float32, copy=False)
-            keep = nms(cls_dets, cfg.TEST.NMS)
-            cls_dets = cls_dets[keep, :]
-            if vis:
-                vis_detections(im, imdb.classes[j], cls_dets)
-            all_boxes[j][i] = cls_dets
+        scores = np.vstack((scores_1,scores_2))
+        scores = np.vstack((scores,scores_3))
+        boxes = np.vstack((boxes_1,boxes_2))
+        boxes = np.vstack((boxes,boxes_3))
+        dets = np.hstack((boxes,scores))
+        keep = nms(dets,cfg.TEST.NMS)
 
+        all_boxes = dets[keep,:]
+        inds = np.where(all_boxes[:,4]>thresh)
+        all_boxes = all_boxes[inds,:][0]
+
+        fout.write(lines[i].strip()+'\n')
+        fout.write(str(all_boxes.shape[0]))
+        fout.write('\n')
+        for j in xrange(all_boxes.shape[0]):
+            fout.write('{} {} {} {} {}\n'.format(all_boxes[j][0],all_boxes[j][1],all_boxes[j][2],all_boxes[j][3],all_boxes[j][4]))
         # Limit to max_per_image detections *over all classes*
-        if max_per_image > 0:
-            image_scores = np.hstack([all_boxes[j][i][:, -1]
-                                      for j in xrange(1, imdb.num_classes)])
-            if len(image_scores) > max_per_image:
-                image_thresh = np.sort(image_scores)[-max_per_image]
-                for j in xrange(1, imdb.num_classes):
-                    keep = np.where(all_boxes[j][i][:, -1] >= image_thresh)[0]
-                    all_boxes[j][i] = all_boxes[j][i][keep, :]
         _t['misc'].toc()
 
         print 'im_detect: {:d}/{:d} {:.3f}s {:.3f}s' \
               .format(i + 1, num_images, _t['im_detect'].average_time,
                       _t['misc'].average_time)
 
-    det_file = os.path.join(output_dir, 'detections.pkl')
-    with open(det_file, 'wb') as f:
-        cPickle.dump(all_boxes, f, cPickle.HIGHEST_PROTOCOL)
-
-    print 'Evaluating detections'
-    imdb.evaluate_detections(all_boxes, output_dir)
+    fout.close()
+    #print 'Evaluating detections'
+    #imdb.evaluate_detections(all_boxes, output_dir)

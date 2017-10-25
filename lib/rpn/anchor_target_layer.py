@@ -28,7 +28,7 @@ class AnchorTargetLayer(caffe.Layer):
         anchor_scales = layer_params.get('scales', (8, 16, 32))
         self._anchor_scales = anchor_scales
         self._times = layer_params.get('densification_times',(1))
-        self._anchors = generate_anchors(ratios=[0.5,1,2],scales=np.array(anchor_scales),times=self._times)
+        self._anchors = generate_anchors(ratios=[1],scales=np.array(anchor_scales),times=self._times)
         self._num_anchors = self._anchors.shape[0]
         self._feat_stride = layer_params['feat_stride']
         
@@ -137,6 +137,9 @@ class AnchorTargetLayer(caffe.Layer):
         overlaps = bbox_overlaps(
             np.ascontiguousarray(anchors, dtype=np.float),
             np.ascontiguousarray(gt_boxes, dtype=np.float))
+
+        if DEBUG:
+            print 'overlaps', overlaps.shape
         argmax_overlaps = overlaps.argmax(axis=1)           
         max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]       
         gt_argmax_overlaps = overlaps.argmax(axis=0)            
@@ -195,8 +198,10 @@ class AnchorTargetLayer(caffe.Layer):
                                 np.sum(labels == 1))
             negative_weights = ((1.0 - cfg.TRAIN.RPN_POSITIVE_WEIGHT) /
                                 np.sum(labels == 0))
+        #bbox_outside_weights[labels == 1, :] = positive_weights
+        #bbox_outside_weights[labels == 0, :] = negative_weights
         bbox_outside_weights[labels == 1, :] = positive_weights
-        bbox_outside_weights[labels == 0, :] = negative_weights
+        bbox_outside_weights[labels == 0, :] = 0
 
         if DEBUG:
             self._sums += bbox_targets[labels == 1, :].sum(axis=0)
